@@ -1,0 +1,55 @@
+name: Validate RewardIQ
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  python-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile Python
+        run: python -m compileall python
+      - name: Generate analytical dataset
+        run: python python/generate_data.py
+      - name: Validate generated outputs
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import pandas as pd
+
+          root = Path('data/generated')
+          expected = ['users','events','transactions','rewards','campaigns','experiment_assignments']
+          for name in expected:
+              path = root / f'{name}.csv'
+              assert path.exists(), f'Missing {path}'
+              df = pd.read_csv(path)
+              assert len(df) > 0, f'{name} is empty'
+              print(name, len(df))
+
+          users = pd.read_csv(root / 'users.csv')
+          assert users.user_id.is_unique
+          assert len(users) == 50000
+          assert set(users.platform.unique()) <= {'ios','android','web'}
+          print('Dataset validation passed.')
+          PY
+      - name: Smoke-test experiment utilities
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, 'python/experimentation')
+          from ab_test import required_sample_size, analyze_binary_experiment
+          assert required_sample_size(.24, .02) > 0
+          result = analyze_binary_experiment(1200, 5000, 1350, 5000)
+          assert result['treatment_rate'] > result['control_rate']
+          print(result)
+          PY
