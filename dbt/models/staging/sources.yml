@@ -1,0 +1,45 @@
+version: 2
+
+sources:
+  - name: rewardiq
+    schema: rewardiq
+    tables:
+      - name: users
+        columns:
+          - name: user_id
+            tests: [not_null, unique]
+          - name: signup_date
+            tests: [not_null]
+          - name: acquisition_channel
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ['organic', 'paid_social', 'paid_search', 'referral', 'partner']
+          - name: platform
+            tests:
+              - accepted_values:
+                  values: ['ios', 'android', 'web']
+      - name: events
+        columns:
+          - name: event_id
+            tests: [not_null, unique]
+          - name: user_id
+            tests:
+              - not_null
+              - relationships:
+                  to: source('rewardiq', 'users')
+                  field: user_id
+      - name: transactions
+        columns:
+          - name: transaction_id
+            tests: [not_null, unique]
+          - name: user_id
+            tests: [not_null]
+      - name: rewards
+      - name: campaigns
+      - name: experiment_assignments
+        columns:
+          - name: variant
+            tests:
+              - accepted_values:
+                  values: ['control', 'treatment']
