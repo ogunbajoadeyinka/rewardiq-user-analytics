@@ -26,7 +26,6 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           import pandas as pd
-
           root = Path('data/generated')
           expected = ['users','events','transactions','rewards','campaigns','experiment_assignments']
           for name in expected:
@@ -35,7 +34,6 @@ jobs:
               df = pd.read_csv(path)
               assert len(df) > 0, f'{name} is empty'
               print(name, len(df))
-
           users = pd.read_csv(root / 'users.csv')
           assert users.user_id.is_unique
           assert len(users) == 50000
@@ -53,3 +51,11 @@ jobs:
           assert result['treatment_rate'] > result['control_rate']
           print(result)
           PY
+      - name: Generate verified portfolio findings
+        run: python python/analyze_portfolio.py
+      - name: Upload dashboard-ready outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: rewardiq-analytics-outputs
+          path: data/outputs/
+          retention-days: 30
