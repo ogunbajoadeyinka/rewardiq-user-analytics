@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: '17 12 * * *'
 
 jobs:
   python-validation:
@@ -59,3 +61,48 @@ jobs:
           name: rewardiq-analytics-outputs
           path: data/outputs/
           retention-days: 30
+
+  cloud-analytics:
+    if: github.event_name != 'pull_request'
+    needs: python-validation
+    runs-on: ubuntu-latest
+    env:
+      PGHOST: aws-0-us-west-2.pooler.supabase.com
+      PGPORT: '5432'
+      PGDATABASE: postgres
+      PGUSER: postgres.uwjngszmsefbhwdqwrvf
+      PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Generate source snapshot
+        run: python python/generate_data.py
+      - name: Load snapshot to Supabase PostgreSQL
+        run: python python/load_postgres.py
+      - name: Validate dbt connection
+        working-directory: dbt
+        run: dbt debug --profiles-dir . --profile rewardiq
+      - name: Build and test analytics models
+        working-directory: dbt
+        run: dbt build --profiles-dir . --profile rewardiq
+      - name: Verify cloud analytics marts
+        run: |
+          python - <<'PY'
+          import os
+          from sqlalchemy import create_engine, text
+          from sqlalchemy.engine import URL
+          url = URL.create('postgresql+psycopg2', username=os.environ['PGUSER'], password=os.environ['PGPASSWORD'], host=os.environ['PGHOST'], port=int(os.environ['PGPORT']), database=os.environ['PGDATABASE'])
+          engine = create_engine(url, connect_args={'sslmode':'require'})
+          with engine.connect() as c:
+              rows = c.execute(text("select table_schema, table_name from information_schema.tables where table_schema like 'dbt%' order by 1,2")).fetchall()
+          if not rows:
+              raise RuntimeError('No dbt analytics tables found')
+          print('Cloud dbt assets:')
+          for row in rows:
+              print(row)
+          PY
