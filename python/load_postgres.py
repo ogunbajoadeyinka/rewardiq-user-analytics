@@ -1,11 +1,13 @@
 """Load generated RewardIQ source data into PostgreSQL/Supabase.
 
-Credentials are read exclusively from environment variables.
+Credentials are read exclusively from environment variables. Tables are truncated
+and reloaded instead of dropped so repeated CI runs do not spend time rebuilding
+large relations on the Supabase free tier.
 """
 import os
 from pathlib import Path
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import URL
 
 DATA_DIR = Path("data/generated")
@@ -28,30 +30,53 @@ def engine_from_env():
         port=int(os.environ["PGPORT"]),
         database=os.environ["PGDATABASE"],
     )
-    return create_engine(url, pool_pre_ping=True, connect_args={"sslmode": "require"})
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        connect_args={"sslmode": "require", "options": "-c statement_timeout=0"},
+    )
 
 
 def main():
     engine = engine_from_env()
     with engine.begin() as conn:
         conn.execute(text("create schema if not exists rewardiq"))
+        # Disable the per-role statement timeout for this controlled CI session.
+        conn.execute(text("set local statement_timeout = 0"))
 
-    # Load parents before children. Replace is safe for this reproducible portfolio
-    # pipeline because each run rebuilds the complete synthetic source snapshot.
+    inspector = inspect(engine)
+    existing = set(inspector.get_table_names(schema="rewardiq"))
+
     for table in TABLES:
         path = DATA_DIR / f"{table}.csv"
         if not path.exists():
             raise FileNotFoundError(path)
         df = pd.read_csv(path)
-        df.to_sql(
-            table,
-            engine,
-            schema="rewardiq",
-            if_exists="replace",
-            index=False,
-            method="multi",
-            chunksize=1000,
-        )
+
+        if table in existing:
+            with engine.begin() as conn:
+                conn.execute(text("set local statement_timeout = 0"))
+                conn.execute(text(f'TRUNCATE TABLE rewardiq."{table}"'))
+            if len(df):
+                df.to_sql(
+                    table,
+                    engine,
+                    schema="rewardiq",
+                    if_exists="append",
+                    index=False,
+                    method="multi",
+                    chunksize=500,
+                )
+        else:
+            df.to_sql(
+                table,
+                engine,
+                schema="rewardiq",
+                if_exists="fail",
+                index=False,
+                method="multi",
+                chunksize=500,
+            )
         print(f"Loaded rewardiq.{table}: {len(df):,} rows")
 
     with engine.connect() as conn:
